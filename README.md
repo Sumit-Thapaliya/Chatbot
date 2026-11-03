@@ -12,14 +12,14 @@ automatically when it starts (built-in reader — `python-dotenv` is not needed)
 
 ```dotenv
 GROQ_API_KEY=gsk_your_real_key_here
-GROQ_MODEL=llama-3.3-70b-versatile
+GROQ_MODEL=openai/gpt-oss-120b
 GROQ_BASE_URL=https://api.groq.com/openai/v1
-GROQ_SYSTEM=You are a warm, precise assistant.
-HOST=0.0.0.0
+GROQ_SYSTEM=                      # empty = use system_prompt.txt
+HOST=127.0.0.1
 PORT=8000
 ```
 
-- `.env` ships with `GROQ_API_KEY=` empty → **demo mode**, zero API calls.
+- `.env` ships with `GROQ_API_KEY=` empty → `/api/chat` returns a clear error until you add your Groq key. There is **no demo mode**.
 - Save the file and **restart the server** for changes to take effect.
 - Real shell variables still override `.env` if you ever inject secrets that way.
 - `.env` is in `.gitignore`, so the key never gets committed.
@@ -28,6 +28,11 @@ PORT=8000
   header (stored in your browser's localStorage). For production use `.env`.
 
 ---
+
+## 1b. This is a **School ERP** assistant (not a general chatbot)
+
+Behaviour is defined by two plain-text files next to `app.py`:
+
 
 ## 2. Run it (you create the venv)
 
@@ -43,11 +48,10 @@ python app.py
 
 Open **<http://127.0.0.1:8000/>** (or <http://localhost:8000/>).
 
-> `0.0.0.0` is a *bind* address meaning "listen on every interface" — it is **not**
-> a URL you can open in a browser. Keep `HOST=0.0.0.0` for Docker / LAN / cloud
-> previews. Set `HOST=127.0.0.1` in `.env` if you want the app reachable only from
-> your own machine; either way the browser URL stays `http://127.0.0.1:8000/`.
-> The startup banner now prints the correct browsable URL.
+> `HOST` defaults to `127.0.0.1`, so uvicorn logs `http://127.0.0.1:8000` and the
+> app is reachable only from your machine. Use `0.0.0.0` only for Docker / LAN /
+> cloud previews — that is a *bind* address, not a browser URL. Either way open
+> `http://127.0.0.1:8000/`. The startup banner prints the correct browsable URL.
 
 Equivalent: `uvicorn app:app --host 0.0.0.0 --port 8000`.
 
@@ -60,6 +64,7 @@ Equivalent: `uvicorn app:app --host 0.0.0.0 --port 8000`.
 | `app.py` | FastAPI: `.env` loader, static files, `/api/config`, `/api/validate`, `/api/chat` SSE proxy |
 | `.env` | **Your config — put all keys here** |
 | `.env.example` | Reference copy with all variables |
+| `system_prompt.txt` | **Default School ERP assistant system prompt** |
 | `requirements.txt` | `fastapi`, `uvicorn`, `httpx` |
 | `.gitignore` | Keeps `.env`, `.venv`, `__pycache__` out of git |
 | `static/index.html` | App shell |
@@ -70,7 +75,7 @@ Equivalent: `uvicorn app:app --host 0.0.0.0 --port 8000`.
 ### Endpoints
 
 - `POST /api/chat` — `{ messages, model, apiKey?, temperature?, maxTokens?, system? }` → `text/event-stream`
-- `GET /api/config` — `{ demo, model, baseUrl, hasServerKey }`
+- `GET /api/config` — `{ model, baseUrl, hasServerKey, prompt, kbChunks }`
 - `POST /api/validate` — `{ apiKey }` → checks the key against `/models`
 - `GET /api/docs` — auto-generated API docs
 

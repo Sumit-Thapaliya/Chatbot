@@ -37,7 +37,6 @@
     apiKey: store.key,
     model: store.model || 'openai/gpt-oss-120b',
     serverKey: false,
-    serverDemo: true,
     history: [],
     busy: false,
     controller: null,
@@ -237,7 +236,7 @@
     const botWrap = addMessage('bot', '', { streaming: false });
     botWrap.style.display = 'none';
 
-    let full = '', shown = '', raf = 0, demo = false;
+    let full = '', shown = '', raf = 0;
     const paint = () => {
       raf = 0;
       if (full === shown) return;
@@ -279,7 +278,6 @@
           if (data === '[DONE]') { done = true; break; }
           let obj;
           try { obj = JSON.parse(data); } catch { continue; }
-          if (obj.demo) demo = true;
           if (obj.error) throw new Error(obj.error);
           const delta = obj.choices?.[0]?.delta?.content;
           if (delta) {
@@ -294,7 +292,7 @@
       renderBot(botWrap, full || '(empty response)', false);
       state.history.push({ role: 'assistant', content: full });
       const meta = botWrap.querySelector('.meta');
-      if (meta) meta.textContent = `${now()}${demo ? ' · demo preview' : ' · streamed'}`;
+      if (meta) meta.textContent = `${now()} · streamed`;
     } catch (err) {
       if (raf) cancelAnimationFrame(raf);
       showTyping(false);
@@ -379,7 +377,7 @@
   function updateConn() {
     const live = Boolean(state.apiKey || state.serverKey);
     connPill.classList.toggle('live', live);
-    connLabel.textContent = live ? 'Live · ' + shortModel(state.model) : 'Demo preview';
+    connLabel.textContent = live ? 'Live · ' + shortModel(state.model) : 'No key set';
   }
 
   function openPop() {
@@ -439,17 +437,16 @@
   /* ---------------------- init ---------------------- */
   fetch('/api/config').then((r) => r.json()).then((cfg) => {
     state.serverKey = Boolean(cfg.hasServerKey);
-    state.serverDemo = Boolean(cfg.demo);
     if (!store.model && cfg.model) { state.model = cfg.model; $('#modelInput').value = cfg.model; }
     updateConn();
   }).catch(() => updateConn());
 
   // A friendly greeting so the first screen matches the reference.
   // It is display-only — real API history starts with the user's first turn.
-  const greet = addMessage('bot', 'Hi! How can I help you today?');
+  const greet = addMessage('bot', 'Hi! How can I help you with School ERP today?');
   greet.querySelector('.meta').textContent = '10:24 AM';
-  greet.dataset.raw = 'Hi! How can I help you today?';
-  greet.querySelector('.bubble').textContent = 'Hi! How can I help you today?';
+  greet.dataset.raw = 'Hi! How can I help you with School ERP today?';
+  greet.querySelector('.bubble').textContent = 'Hi! How can I help you with School ERP today?';
   greet.querySelector('.msg-actions').remove();
 
   document.addEventListener('keydown', (e) => {
