@@ -1,0 +1,15 @@
+# local secrets — never commit these
+.env
+
+# virtual environments (create your own; see README)
+.venv/
+venv/
+env/
+
+# python
+__pycache__/
+*.py[cod]
+
+# packaging / QA artifacts
+*.zip
+*.log
