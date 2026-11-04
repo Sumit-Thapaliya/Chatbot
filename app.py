@@ -22,6 +22,7 @@ event instead of any simulated reply.
 from __future__ import annotations
 
 import json
+import ipaddress
 import os
 import re
 import time
@@ -59,7 +60,7 @@ def load_env_file(path: Path) -> None:
         key, value = key.strip(), value.strip()
         if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
             value = value[1:-1]
-        elif " #" in value:                 # strip trailing inline comment
+        elif " #" in value:
             value = value.split(" #", 1)[0].strip()
         if key and key not in os.environ:
             os.environ[key] = value
@@ -72,25 +73,31 @@ GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 GROQ_SYSTEM = os.getenv("GROQ_SYSTEM", "")
 ENV_KEY = os.getenv("GROQ_API_KEY", "").strip()
 
-# Placeholder values from the template must not count as a real key.
+
 if not ENV_KEY or "your_key" in ENV_KEY or "..." in ENV_KEY:
     ENV_KEY = ""
 
-# Public chat traffic is rate limited per IP (in-memory, resets on restart).
+
 def _int_env(name: str, default: int, hi: int = 600) -> int:
     try:
         return max(1, min(int(os.getenv(name, str(default))), hi))
     except ValueError:
         return default
 
-CHAT_RPM = _int_env("CHAT_RPM", 60)                       # every /api/chat request
-WIDGET_RPM = _int_env("WIDGET_RPM", 30)                   # stricter widget cap
+CHAT_RPM = _int_env("CHAT_RPM", 60)
+WIDGET_RPM = _int_env("WIDGET_RPM", 30)
 WIDGET_MAX_TOKENS = _int_env("WIDGET_MAX_TOKENS", 1024, 4096)
 _HITS: dict[tuple[str, str], deque] = {}
 
 
 def rate_ok(kind: str, ip: str, limit: int) -> bool:
     now = time.monotonic()
+    if len(_HITS) > 5000:
+        for key, bucket in list(_HITS.items()):
+            if not bucket or now - bucket[-1] > 60:
+                del _HITS[key]
+        if len(_HITS) > 5000 and (kind, ip) not in _HITS:
+            return False
     hits = _HITS.setdefault((kind, ip), deque())
     while hits and now - hits[0] > 60:
         hits.popleft()
@@ -99,16 +106,16 @@ def rate_ok(kind: str, ip: str, limit: int) -> bool:
     hits.append(now)
     return True
 
-# --------------------------------------------------------------------------
-# School ERP prompt + lightweight knowledge-base retrieval (no external service)
-# --------------------------------------------------------------------------
+
+
+
 
 def _read(name: str) -> str:
     f = BASE_DIR / name
     return f.read_text(encoding="utf-8").strip() if f.exists() else ""
 
-# A one-line GROQ_SYSTEM in .env overrides the file; otherwise use the full prompt.
-# Lines beginning with "# " are notes for humans and are not sent to the model.
+
+
 def _system_prompt() -> str:
     override = os.getenv("GROQ_SYSTEM", "").strip()
     if override:
@@ -175,9 +182,9 @@ def friendly_error(status: int, text: str) -> str:
     return f"Groq API error {status}: {str(detail)[:300]}"
 
 
-# --------------------------------------------------------------------------
-# API
-# --------------------------------------------------------------------------
+
+
+
 
 
 @app.get("/api/config")
@@ -191,84 +198,67 @@ async def config():
     }
 
 
+def client_ip(req: Request) -> str:
+    if os.getenv("RENDER", "").lower() == "true":
+        value = req.headers.get("true-client-ip", "").strip()
+        try:
+            return str(ipaddress.ip_address(value))
+        except ValueError:
+            return "render-unknown"
+    return req.client.host if req.client else "unknown"
+
+
 @app.post("/api/validate")
 async def validate(req: Request):
-    body = await req.json()
-    key = str(body.get("apiKey") or ENV_KEY or "").strip()
-    if not key:
-        return {"ok": False, "error": "No API key provided."}
-    try:
-        async with httpx.AsyncClient(timeout=12) as client:
-            r = await client.get(MODELS_ENDPOINT, headers={"Authorization": f"Bearer {key}"})
-        if r.status_code != 200:
-            return {"ok": False, "error": friendly_error(r.status_code, r.text)}
-        ids = [m.get("id") for m in r.json().get("data", []) if m.get("id")]
-        return {"ok": True, "count": len(ids), "models": ids[:40]}
-    except Exception as e:
-        return {"ok": False, "error": f"Network error: {e}"}
+    return {"ok": False, "error": "API keys and model settings are managed by the server."}
 
 
 @app.post("/api/chat")
 async def chat(req: Request):
-    try:
-        body = await req.json()
-    except Exception:
-        return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
-
-    messages = body.get("messages") or []
-    if not isinstance(messages, list) or not messages:
-        return JSONResponse({"error": "No messages supplied"}, status_code=400)
-
-    # A public widget can be called by anyone, so cap requests per IP and
-    # ignore every client-controlled setting that could inflate Groq usage.
-    widget = bool(body.get("widget"))
-    ip = (req.headers.get("x-forwarded-for", "").split(",")[0].strip()
-          or (req.client.host if req.client else "unknown"))
-    if (not rate_ok("chat", ip, CHAT_RPM)
-            or (widget and not rate_ok("widget", ip, WIDGET_RPM))):
+    ip = client_ip(req)
+    if (not rate_ok("global", "all", 120)
+            or not rate_ok("chat", ip, min(CHAT_RPM, WIDGET_RPM))):
         async def limited():
             yield sse({"error": "Too many messages. Please wait a minute and try again."})
             yield sse("[DONE]")
         return StreamingResponse(limited(), media_type="text/event-stream", headers=SSE_HEADERS)
 
-    if widget:
-        api_key = ENV_KEY                 # never body["apiKey"]
-        model = GROQ_MODEL               # never body["model"]
-    else:
-        api_key = str(body.get("apiKey") or ENV_KEY or "").strip()
-        model = str(body.get("model") or GROQ_MODEL)[:120]
-    # Groq API reference: temperature is 0..2 (default 1), and the current field
-    # is `max_completion_tokens` — `max_tokens` is deprecated. Clamp + guard so
-    # a bad client value can never produce a 500 or an upstream 400.
+    chunks = []
+    size = 0
+    async for chunk in req.stream():
+        size += len(chunk)
+        if size > 65536:
+            return JSONResponse({"error": "Request too large"}, status_code=413)
+        chunks.append(chunk)
     try:
-        temperature = min(max(float(body.get("temperature", 0.7)), 0.0), 2.0)
-    except (TypeError, ValueError):
-        temperature = 0.7
-    try:
-        max_tokens = min(max(int(body.get("maxTokens", 2048)), 128), 32768)
-    except (TypeError, ValueError):
-        max_tokens = 2048
-    if widget:
-        temperature = 0.7                       # fixed
-        max_tokens = WIDGET_MAX_TOKENS          # fixed output cap
-    system = SYSTEM if widget else str(body.get("system") or SYSTEM)[:20000]
+        body = json.loads(b"".join(chunks))
+    except (ValueError, UnicodeDecodeError):
+        return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+    if not isinstance(body, dict):
+        return JSONResponse({"error": "Invalid request"}, status_code=400)
+    messages = body.get("messages")
+    if not isinstance(messages, list) or not messages:
+        return JSONResponse({"error": "No messages supplied"}, status_code=400)
+    if any(not isinstance(m, dict) or m.get("role") not in ("user", "assistant")
+           or not isinstance(m.get("content"), str) for m in messages):
+        return JSONResponse({"error": "Invalid messages"}, status_code=400)
+    if messages[-1]["role"] != "user" or not messages[-1]["content"].strip():
+        return JSONResponse({"error": "A user message is required"}, status_code=400)
 
-    clean = [
-        {"role": "assistant" if m.get("role") == "assistant" else "user",
-         "content": str(m.get("content") or "")[:100000]}
-        for m in messages[-40:]
-    ]
-    if widget:
-        # Hard input cap for public traffic: 12 turns / 12k characters.
-        clean = clean[-12:]
-        budget, out = 12000, []
-        for m in clean:
-            c = m["content"][:budget]
-            out.append({"role": m["role"], "content": c})
-            budget -= len(c)
-            if budget <= 0:
-                break
-        clean = out
+    api_key = ENV_KEY
+    model = GROQ_MODEL
+    system = SYSTEM
+    temperature = 0.7
+    max_tokens = WIDGET_MAX_TOKENS
+    budget = 12000
+    clean = []
+    for m in reversed(messages[-12:]):
+        if budget <= 0:
+            break
+        text = m["content"][:budget]
+        clean.append({"role": m["role"], "content": text})
+        budget -= len(text)
+    clean.reverse()
     if system:
         last_user = next((m["content"] for m in reversed(clean) if m["role"] == "user"), "")
         excerpts = retrieve(last_user)
@@ -301,10 +291,10 @@ async def chat(req: Request):
     try:
         request = client.build_request("POST", CHAT_ENDPOINT, json=payload, headers=headers)
         upstream = await client.send(request, stream=True)
-    except Exception as e:
+    except Exception:
         await client.aclose()
         async def fail():
-            yield sse({"error": f"Could not reach Groq: {e}"})
+            yield sse({"error": "Could not reach Groq. Please try again later."})
             yield sse("[DONE]")
         return StreamingResponse(fail(), media_type="text/event-stream", headers=SSE_HEADERS)
 
@@ -329,7 +319,7 @@ async def chat(req: Request):
     return StreamingResponse(passthrough(), media_type="text/event-stream", headers=SSE_HEADERS)
 
 
-# Static files last, so /api/* routes win.
+
 app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
 
 
@@ -341,10 +331,10 @@ if __name__ == "__main__":
         port = int(os.getenv("PORT", "8000"))
     except ValueError:
         port = 8000
-    # 0.0.0.0 / :: are wildcard binds — browsers need a concrete loopback address.
+
     browse = "127.0.0.1" if host in ("0.0.0.0", "::", "") else host
     print(f"\n  ✦ ChatBot  →  http://{browse}:{port}/   (or http://localhost:{port}/)")
     print(f"  ✦ Bind        →  {host}:{port}")
     print(f"  ✦ Groq key    →  {'loaded' if ENV_KEY else 'MISSING - add it to .env'}")
     print(f"  ✦ Model       →  {GROQ_MODEL}\n")
-    uvicorn.run(app, host=host, port=port, log_level="info")
+    uvicorn.run(app, host=host, port=port, log_level="info", proxy_headers=False)

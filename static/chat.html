@@ -6,9 +6,8 @@
 <meta name="color-scheme" content="light dark" />
 <title>School ERP Assistant · chat</title>
 <link rel="stylesheet" href="/styles.css" />
+<link rel="stylesheet" href="/widget-theme.css" />
 <script>
-  // Compact page for the widget iframe. Always embed mode; theme comes from
-  // widget.js via the query string, otherwise from the saved preference.
   (function () {
     try {
       var asked = new URLSearchParams(location.search).get('theme');
@@ -22,7 +21,7 @@
 </head>
 <body>
 
-<!-- Compact chat: messages + typing + composer only. No hero, header, key input. -->
+
 <main class="app" data-theme="light" aria-label="Chat">
 
   <div class="thread" id="thread">
@@ -45,8 +44,7 @@
   </footer>
 </main>
 
-<!-- Hidden stubs: static/app.js binds these IDs. Embed CSS keeps them invisible,
-     so the connection panel / key field is completely unreachable in the popup. -->
+
 <div hidden aria-hidden="true">
   <div id="ripples"></div>
   <button id="themeToggle" type="button"></button>
@@ -64,5 +62,6 @@
 </div>
 
 <script src="/app.js" defer></script>
+<script src="/widget-theme.js" defer></script>
 </body>
 </html>

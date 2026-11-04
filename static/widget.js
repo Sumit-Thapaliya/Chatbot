@@ -1,10 +1,4 @@
-/* =====================================================================
-   ChatBot · embeddable widget loader (draggable launcher + popup)
-   Add ONE line to any page:  <script src="https://YOUR_HOST/widget.js" async></script>
-   The chat lives inside an iframe served from YOUR_HOST (chat.html).
-   Every /api/chat call and the Groq API key stay on that server — nothing
-   sensitive is exposed to the host page.
-   ===================================================================== */
+
 (function () {
   'use strict';
 
@@ -38,16 +32,19 @@
   var server   = String(opt('server', new URL(me.src, location.href).origin)).replace(/\/+$/, '');
   var title    = String(opt('title', 'School ERP Assistant'));
   var subtitle = String(opt('subtitle', 'Admissions, fees, attendance & more'));
-  var accent0  = String(opt('accent', '#f2532a'));
-  var accent   = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(accent0) ? accent0 : '#f2532a';
+  var accent0  = String(opt('accent', '#165c95'));
+  var accent   = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(accent0) ? accent0 : '#165c95';
   var position = String(opt('position', 'right')) === 'left' ? 'left' : 'right';
   var side     = num('side', 20, 0);
   var bottom   = num('bottom', 20, 0);
   var width    = num('width', 380, 280);
   var height   = num('height', 560, 360);
-  var theme    = String(opt('theme', 'auto'));
-  if (theme !== 'light' && theme !== 'dark') {
-    theme = (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
+  var themeSetting = String(opt('theme', 'auto'));
+  function currentTheme() {
+    if (themeSetting === 'dark' || themeSetting === 'light') return themeSetting;
+    if (document.documentElement.classList.contains('dark')) return 'dark';
+    if (document.documentElement.classList.contains('light')) return 'light';
+    return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
   }
   var autoOpen   = yes('auto-open', false);
   var draggable  = yes('draggable', true);
@@ -58,8 +55,8 @@
   var css = document.createElement('style');
   css.textContent = `
 #cbw-launch{position:fixed;bottom:${bottom}px;${position}:${side}px;z-index:2147483000;
-  width:${SIZE}px;height:${SIZE}px;border:0;border-radius:50%;cursor:grab;background:${accent};
-  color:#fff;display:flex;align-items:center;justify-content:center;padding:0;
+  width:${SIZE}px;height:${SIZE}px;border:0;border-radius:50%;cursor:grab;background:var(--primary, ${accent});
+  color:var(--primary-foreground, #ffffff);display:flex;align-items:center;justify-content:center;padding:0;
   touch-action:none;user-select:none;-webkit-user-select:none;
   box-shadow:0 12px 30px rgba(0,0,0,.28);transition:transform .25s ease,box-shadow .25s ease;}
 #cbw-launch:hover{transform:translateY(-3px) scale(1.05);box-shadow:0 18px 38px rgba(0,0,0,.34);}
@@ -74,13 +71,13 @@
 #cbw-panel{position:fixed;bottom:${bottom + 74}px;${position}:${side}px;z-index:2147483000;
   width:${width}px;height:min(${height}px,calc(100vh - ${bottom + 100}px));
   display:flex;flex-direction:column;overflow:hidden;border-radius:18px;
-  background:#fff;box-shadow:0 24px 70px rgba(20,10,40,.34);
+  background:var(--card, #ffffff);color:var(--card-foreground, #0f2433);border:1px solid var(--border, #dbe7ec);box-shadow:0 24px 70px rgba(15,36,51,.24);
   font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
   opacity:0;transform:translateY(14px) scale(.98);pointer-events:none;
   transition:opacity .26s ease,transform .26s cubic-bezier(.2,.8,.2,1);}
 #cbw-panel.open{opacity:1;transform:none;pointer-events:auto;}
 #cbw-head{flex:none;display:flex;align-items:center;gap:10px;padding:12px 14px;
-  background:linear-gradient(120deg,${accent},#6c53e8);color:#fff;}
+  background:var(--primary, ${accent});color:var(--primary-foreground, #ffffff);}
 #cbw-head .cbw-t{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;}
 #cbw-head b{font-size:13.5px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 #cbw-head small{font-size:10.5px;opacity:.85;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
@@ -119,12 +116,12 @@
   var b = document.createElement('b'); b.textContent = title;
   var s = document.createElement('small'); s.textContent = subtitle;
   titles.appendChild(b); titles.appendChild(s);
-  var close = document.createElement('button');
-  close.id = 'cbw-close';
-  close.type = 'button';
-  close.setAttribute('aria-label', 'Close chat');
-  close.textContent = '✕';
-  head.appendChild(titles); head.appendChild(close);
+  var closeButton = document.createElement('button');
+  closeButton.id = 'cbw-close';
+  closeButton.type = 'button';
+  closeButton.setAttribute('aria-label', 'Close chat');
+  closeButton.textContent = '✕';
+  head.appendChild(titles); head.appendChild(closeButton);
 
   var frame = document.createElement('iframe');
   frame.id = 'cbw-frame';
@@ -137,13 +134,25 @@
   (document.body || document.documentElement).appendChild(panel);
   (document.body || document.documentElement).appendChild(launch);
 
-  /* -------------------- compact popup page -------------------- */
-  var frameUrl = server + '/chat.html?theme=' + encodeURIComponent(theme);
+  
+  var frameUrl = server + '/chat.html?theme=' + encodeURIComponent(currentTheme());
+  var frameOrigin = new URL(server, location.href).origin;
+  function syncTheme() {
+    if (loaded && frame.contentWindow) frame.contentWindow.postMessage({ type: 'cbw-theme', theme: currentTheme() }, frameOrigin);
+  }
+  frame.addEventListener('load', syncTheme);
+  if (themeSetting === 'auto') {
+    new MutationObserver(syncTheme).observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'data-theme'] });
+    if (window.matchMedia) {
+      var media = window.matchMedia('(prefers-color-scheme: dark)');
+      if (media.addEventListener) media.addEventListener('change', syncTheme);
+    }
+  }
   var loaded = false;
 
-  /* -------------------- popup follows the icon -------------------- */
+  
   function layout() {
-    if (window.innerWidth <= 480) return;         // full-screen CSS handles mobile
+    if (window.innerWidth <= 480) return;
     var r = launch.getBoundingClientRect();
     var pw = Math.min(width, window.innerWidth - 24);
     var ph = Math.min(height, window.innerHeight - 100);
@@ -173,7 +182,7 @@
   function close() { setOpen(false); }
   function toggle(){ setOpen(!panel.classList.contains('open')); }
 
-  /* -------------------- draggable launcher -------------------- */
+  
   function savePos() {
     if (!remember) return;
     var r = launch.getBoundingClientRect();
@@ -235,7 +244,7 @@
     if (suppressClick) { suppressClick = false; e.preventDefault(); e.stopPropagation(); return; }
     toggle();
   });
-  close.addEventListener('click', function () { close(); launch.focus(); });
+  closeButton.addEventListener('click', function () { close(); launch.focus(); });
   document.addEventListener('keydown', function (e) {
     if (e.key === 'Escape' && panel.classList.contains('open')) close();
   });
