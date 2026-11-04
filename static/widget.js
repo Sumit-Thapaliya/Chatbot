@@ -68,8 +68,9 @@
 #cbw-launch .cbw-x{display:none;}
 #cbw-launch.cbw-isopen .cbw-bubble{display:none;}
 #cbw-launch.cbw-isopen .cbw-x{display:block;}
+#cbw-launch.cbw-isopen.cbw-cover{visibility:hidden;pointer-events:none;}
 #cbw-panel{position:fixed;bottom:${bottom + 74}px;${position}:${side}px;z-index:2147483000;
-  width:${width}px;height:min(${height}px,calc(100vh - ${bottom + 100}px));
+  width:${width}px;height:${height}px;box-sizing:border-box;
   display:flex;flex-direction:column;overflow:hidden;border-radius:18px;
   background:var(--card, #ffffff);color:var(--card-foreground, #0f2433);border:1px solid var(--border, #dbe7ec);box-shadow:0 24px 70px rgba(15,36,51,.24);
   font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
@@ -84,12 +85,7 @@
 #cbw-close{flex:none;width:28px;height:28px;border:0;border-radius:50%;cursor:pointer;
   background:rgba(255,255,255,.2);color:#fff;font-size:14px;line-height:1;}
 #cbw-close:hover{background:rgba(255,255,255,.34);}
-#cbw-frame{flex:1;width:100%;border:0;background:transparent;}
-@media (max-width:480px){
-  #cbw-panel{inset:0!important;top:0!important;bottom:0!important;left:0!important;right:0!important;
-    width:100%!important;height:100%!important;max-height:none!important;border-radius:0!important;}
-  #cbw-launch{bottom:16px!important;${position}:16px!important;}
-}
+#cbw-frame{flex:1 1 0;min-height:0;width:100%;border:0;background:transparent;}
 @media (prefers-reduced-motion:reduce){#cbw-launch,#cbw-panel{transition:none!important;}}
 `;
   document.head.appendChild(css);
@@ -152,21 +148,53 @@
 
   
   function layout() {
-    if (window.innerWidth <= 480) return;
+    var visual = window.visualViewport;
+    var vx = visual ? visual.offsetLeft : 0;
+    var vy = visual ? visual.offsetTop : 0;
+    var vw = visual ? visual.width : window.innerWidth;
+    var vh = visual ? visual.height : window.innerHeight;
+    var margin = 12;
+    var gap = 12;
+    var maxWidth = Math.max(0, vw - margin * 2);
+    var maxHeight = Math.max(0, vh - margin * 2);
     var r = launch.getBoundingClientRect();
-    var pw = Math.min(width, window.innerWidth - 24);
-    var ph = Math.min(height, window.innerHeight - 100);
-    if (r.top > ph + 20) {
-      panel.style.bottom = (window.innerHeight - r.top + 12) + 'px';
-      panel.style.top = 'auto';
+    var pw = Math.min(width, maxWidth);
+    var ph = Math.min(height, maxHeight);
+    var above = r.top - (vy + margin) - gap;
+    var below = vy + vh - margin - r.bottom - gap;
+    var leftSpace = r.left - (vx + margin) - gap;
+    var rightSpace = vx + vw - margin - r.right - gap;
+    var x;
+    var y;
+    var cover = false;
+
+    if (vw <= 480) {
+      cover = true;
+      x = vx + margin;
+      y = vy + margin;
+      pw = maxWidth;
+      ph = maxHeight;
+    } else if (Math.max(above, below) >= 280) {
+      var placeAbove = above >= below;
+      ph = Math.min(height, placeAbove ? above : below);
+      x = clamp(position === 'right' ? r.right - pw : r.left, vx + margin, vx + vw - margin - pw);
+      y = placeAbove ? r.top - gap - ph : r.bottom + gap;
+    } else if (Math.max(leftSpace, rightSpace) >= 280) {
+      var placeLeft = leftSpace >= rightSpace;
+      pw = Math.min(width, placeLeft ? leftSpace : rightSpace);
+      x = placeLeft ? r.left - gap - pw : r.right + gap;
+      y = clamp(r.top + r.height / 2 - ph / 2, vy + margin, vy + vh - margin - ph);
     } else {
-      panel.style.top = Math.min(r.bottom + 12, window.innerHeight - ph - 12) + 'px';
-      panel.style.bottom = 'auto';
+      cover = true;
+      x = vx + margin + (maxWidth - pw) / 2;
+      y = vy + margin + (maxHeight - ph) / 2;
     }
-    var sidePx = position === 'right' ? (window.innerWidth - r.right) : r.left;
-    sidePx = clamp(sidePx, 12, Math.max(12, window.innerWidth - pw - 12));
-    if (position === 'right') { panel.style.right = sidePx + 'px'; panel.style.left = 'auto'; }
-    else { panel.style.left = sidePx + 'px'; panel.style.right = 'auto'; }
+
+    launch.classList.toggle('cbw-cover', cover);
+    panel.style.left = x + 'px';
+    panel.style.top = y + 'px';
+    panel.style.right = 'auto';
+    panel.style.bottom = 'auto';
     panel.style.width = pw + 'px';
     panel.style.height = ph + 'px';
   }
@@ -248,6 +276,10 @@
   document.addEventListener('keydown', function (e) {
     if (e.key === 'Escape' && panel.classList.contains('open')) close();
   });
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', layout);
+    window.visualViewport.addEventListener('scroll', layout);
+  }
   window.addEventListener('resize', function () {
     var r = launch.getBoundingClientRect();
     if (r.left > window.innerWidth - SIZE || r.top > window.innerHeight - SIZE) {
