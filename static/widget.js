@@ -1,0 +1,259 @@
+/* =====================================================================
+   ChatBot · embeddable widget loader (draggable launcher + popup)
+   Add ONE line to any page:  <script src="https://YOUR_HOST/widget.js" async></script>
+   The chat lives inside an iframe served from YOUR_HOST (chat.html).
+   Every /api/chat call and the Groq API key stay on that server — nothing
+   sensitive is exposed to the host page.
+   ===================================================================== */
+(function () {
+  'use strict';
+
+  if (window.ChatBotWidget) return;
+
+  var me = document.currentScript;
+  if (!me) {
+    var scripts = document.getElementsByTagName('script');
+    for (var i = scripts.length - 1; i >= 0; i--) {
+      if (/\/widget\.js(\?|$)/.test(scripts[i].src)) { me = scripts[i]; break; }
+    }
+  }
+  if (!me || !me.src) return;
+
+  var globals = window.ChatBotWidgetConfig || {};
+  function opt(name, fallback) {
+    var v = me.getAttribute('data-' + name);
+    if (v === null || v === '') v = globals[name];
+    return (v === undefined || v === null || v === '') ? fallback : v;
+  }
+  function num(name, fallback, min) {
+    var n = parseInt(opt(name, fallback), 10);
+    return isNaN(n) ? fallback : Math.max(min, n);
+  }
+  function yes(name, fallback) {
+    var v = String(opt(name, fallback)).toLowerCase();
+    return v === 'true' || v === '1' || v === 'yes';
+  }
+  function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+  var server   = String(opt('server', new URL(me.src, location.href).origin)).replace(/\/+$/, '');
+  var title    = String(opt('title', 'School ERP Assistant'));
+  var subtitle = String(opt('subtitle', 'Admissions, fees, attendance & more'));
+  var accent0  = String(opt('accent', '#f2532a'));
+  var accent   = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(accent0) ? accent0 : '#f2532a';
+  var position = String(opt('position', 'right')) === 'left' ? 'left' : 'right';
+  var side     = num('side', 20, 0);
+  var bottom   = num('bottom', 20, 0);
+  var width    = num('width', 380, 280);
+  var height   = num('height', 560, 360);
+  var theme    = String(opt('theme', 'auto'));
+  if (theme !== 'light' && theme !== 'dark') {
+    theme = (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
+  }
+  var autoOpen   = yes('auto-open', false);
+  var draggable  = yes('draggable', true);
+  var remember   = yes('remember-position', true);
+  var POS_KEY    = 'chatbot.widget.pos';
+  var SIZE       = 58;
+
+  var css = document.createElement('style');
+  css.textContent = `
+#cbw-launch{position:fixed;bottom:${bottom}px;${position}:${side}px;z-index:2147483000;
+  width:${SIZE}px;height:${SIZE}px;border:0;border-radius:50%;cursor:grab;background:${accent};
+  color:#fff;display:flex;align-items:center;justify-content:center;padding:0;
+  touch-action:none;user-select:none;-webkit-user-select:none;
+  box-shadow:0 12px 30px rgba(0,0,0,.28);transition:transform .25s ease,box-shadow .25s ease;}
+#cbw-launch:hover{transform:translateY(-3px) scale(1.05);box-shadow:0 18px 38px rgba(0,0,0,.34);}
+#cbw-launch:focus-visible{outline:3px solid #fff;outline-offset:3px;}
+#cbw-launch.cbw-dragging{cursor:grabbing;transform:none!important;transition:none;
+  box-shadow:0 22px 44px rgba(0,0,0,.4);}
+#cbw-launch svg{width:26px;height:26px;fill:none;stroke:currentColor;stroke-width:2;
+  stroke-linecap:round;stroke-linejoin:round;pointer-events:none;}
+#cbw-launch .cbw-x{display:none;}
+#cbw-launch.cbw-isopen .cbw-bubble{display:none;}
+#cbw-launch.cbw-isopen .cbw-x{display:block;}
+#cbw-panel{position:fixed;bottom:${bottom + 74}px;${position}:${side}px;z-index:2147483000;
+  width:${width}px;height:min(${height}px,calc(100vh - ${bottom + 100}px));
+  display:flex;flex-direction:column;overflow:hidden;border-radius:18px;
+  background:#fff;box-shadow:0 24px 70px rgba(20,10,40,.34);
+  font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+  opacity:0;transform:translateY(14px) scale(.98);pointer-events:none;
+  transition:opacity .26s ease,transform .26s cubic-bezier(.2,.8,.2,1);}
+#cbw-panel.open{opacity:1;transform:none;pointer-events:auto;}
+#cbw-head{flex:none;display:flex;align-items:center;gap:10px;padding:12px 14px;
+  background:linear-gradient(120deg,${accent},#6c53e8);color:#fff;}
+#cbw-head .cbw-t{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;}
+#cbw-head b{font-size:13.5px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+#cbw-head small{font-size:10.5px;opacity:.85;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+#cbw-close{flex:none;width:28px;height:28px;border:0;border-radius:50%;cursor:pointer;
+  background:rgba(255,255,255,.2);color:#fff;font-size:14px;line-height:1;}
+#cbw-close:hover{background:rgba(255,255,255,.34);}
+#cbw-frame{flex:1;width:100%;border:0;background:transparent;}
+@media (max-width:480px){
+  #cbw-panel{inset:0!important;top:0!important;bottom:0!important;left:0!important;right:0!important;
+    width:100%!important;height:100%!important;max-height:none!important;border-radius:0!important;}
+  #cbw-launch{bottom:16px!important;${position}:16px!important;}
+}
+@media (prefers-reduced-motion:reduce){#cbw-launch,#cbw-panel{transition:none!important;}}
+`;
+  document.head.appendChild(css);
+
+  var launch = document.createElement('button');
+  launch.id = 'cbw-launch';
+  launch.type = 'button';
+  launch.setAttribute('aria-label', 'Open chat with ' + title);
+  launch.setAttribute('aria-expanded', 'false');
+  launch.title = title + ' (drag to move)';
+  launch.innerHTML =
+    '<svg class="cbw-bubble" viewBox="0 0 24 24"><path d="M21 11.5a8.4 8.4 0 0 1-8.5 8.5 9 9 0 0 1-3.8-.8L3 21l1.8-5.2A8.4 8.4 0 0 1 12.5 3 8.4 8.4 0 0 1 21 11.5Z"/></svg>' +
+    '<svg class="cbw-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg>';
+
+  var panel = document.createElement('div');
+  panel.id = 'cbw-panel';
+  panel.setAttribute('role', 'dialog');
+  panel.setAttribute('aria-label', title);
+
+  var head = document.createElement('div');
+  head.id = 'cbw-head';
+  var titles = document.createElement('div');
+  titles.className = 'cbw-t';
+  var b = document.createElement('b'); b.textContent = title;
+  var s = document.createElement('small'); s.textContent = subtitle;
+  titles.appendChild(b); titles.appendChild(s);
+  var close = document.createElement('button');
+  close.id = 'cbw-close';
+  close.type = 'button';
+  close.setAttribute('aria-label', 'Close chat');
+  close.textContent = '✕';
+  head.appendChild(titles); head.appendChild(close);
+
+  var frame = document.createElement('iframe');
+  frame.id = 'cbw-frame';
+  frame.title = title + ' chat';
+  frame.setAttribute('allow', 'clipboard-write');
+  frame.referrerPolicy = 'strict-origin-when-cross-origin';
+  frame.loading = 'lazy';
+
+  panel.appendChild(head); panel.appendChild(frame);
+  (document.body || document.documentElement).appendChild(panel);
+  (document.body || document.documentElement).appendChild(launch);
+
+  /* -------------------- compact popup page -------------------- */
+  var frameUrl = server + '/chat.html?theme=' + encodeURIComponent(theme);
+  var loaded = false;
+
+  /* -------------------- popup follows the icon -------------------- */
+  function layout() {
+    if (window.innerWidth <= 480) return;         // full-screen CSS handles mobile
+    var r = launch.getBoundingClientRect();
+    var pw = Math.min(width, window.innerWidth - 24);
+    var ph = Math.min(height, window.innerHeight - 100);
+    if (r.top > ph + 20) {
+      panel.style.bottom = (window.innerHeight - r.top + 12) + 'px';
+      panel.style.top = 'auto';
+    } else {
+      panel.style.top = Math.min(r.bottom + 12, window.innerHeight - ph - 12) + 'px';
+      panel.style.bottom = 'auto';
+    }
+    var sidePx = position === 'right' ? (window.innerWidth - r.right) : r.left;
+    sidePx = clamp(sidePx, 12, Math.max(12, window.innerWidth - pw - 12));
+    if (position === 'right') { panel.style.right = sidePx + 'px'; panel.style.left = 'auto'; }
+    else { panel.style.left = sidePx + 'px'; panel.style.right = 'auto'; }
+    panel.style.width = pw + 'px';
+    panel.style.height = ph + 'px';
+  }
+
+  function setOpen(open) {
+    if (open && !loaded) { frame.src = frameUrl; loaded = true; }
+    if (open) layout();
+    panel.classList.toggle('open', open);
+    launch.classList.toggle('cbw-isopen', open);
+    launch.setAttribute('aria-expanded', open ? 'true' : 'false');
+  }
+  function open()  { setOpen(true); }
+  function close() { setOpen(false); }
+  function toggle(){ setOpen(!panel.classList.contains('open')); }
+
+  /* -------------------- draggable launcher -------------------- */
+  function savePos() {
+    if (!remember) return;
+    var r = launch.getBoundingClientRect();
+    try { localStorage.setItem(POS_KEY, JSON.stringify({ x: Math.round(r.left), y: Math.round(r.top) })); } catch (e) {}
+  }
+  function restorePos() {
+    if (!remember) return;
+    try {
+      var p = JSON.parse(localStorage.getItem(POS_KEY) || 'null');
+      if (p && typeof p.x === 'number' && typeof p.y === 'number') {
+        launch.style.left = clamp(p.x, 8, window.innerWidth - SIZE - 8) + 'px';
+        launch.style.top = clamp(p.y, 8, window.innerHeight - SIZE - 8) + 'px';
+        launch.style.right = 'auto'; launch.style.bottom = 'auto';
+      }
+    } catch (e) {}
+  }
+  function resetPosition() {
+    launch.style.left = ''; launch.style.top = '';
+    launch.style.right = ''; launch.style.bottom = '';
+    try { localStorage.removeItem(POS_KEY); } catch (e) {}
+    layout();
+  }
+
+  var dragging = false, moved = false, suppressClick = false;
+  var startX = 0, startY = 0, originX = 0, originY = 0;
+
+  if (draggable) {
+    launch.addEventListener('pointerdown', function (e) {
+      if (e.button !== 0) return;
+      var r = launch.getBoundingClientRect();
+      launch.style.left = r.left + 'px'; launch.style.top = r.top + 'px';
+      launch.style.right = 'auto'; launch.style.bottom = 'auto';
+      startX = e.clientX; startY = e.clientY;
+      originX = r.left; originY = r.top;
+      moved = false; dragging = true;
+      launch.classList.add('cbw-dragging');
+      try { launch.setPointerCapture(e.pointerId); } catch (err) {}
+    });
+    launch.addEventListener('pointermove', function (e) {
+      if (!dragging) return;
+      var dx = e.clientX - startX, dy = e.clientY - startY;
+      if (Math.abs(dx) + Math.abs(dy) > 4) moved = true;
+      launch.style.left = clamp(originX + dx, 8, window.innerWidth - SIZE - 8) + 'px';
+      launch.style.top = clamp(originY + dy, 8, window.innerHeight - SIZE - 8) + 'px';
+      if (panel.classList.contains('open')) layout();
+    });
+    function endDrag(e) {
+      if (!dragging) return;
+      dragging = false;
+      launch.classList.remove('cbw-dragging');
+      try { launch.releasePointerCapture(e.pointerId); } catch (err) {}
+      if (moved) { suppressClick = true; savePos(); layout(); }
+    }
+    launch.addEventListener('pointerup', endDrag);
+    launch.addEventListener('pointercancel', endDrag);
+  }
+
+  launch.addEventListener('click', function (e) {
+    if (suppressClick) { suppressClick = false; e.preventDefault(); e.stopPropagation(); return; }
+    toggle();
+  });
+  close.addEventListener('click', function () { close(); launch.focus(); });
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && panel.classList.contains('open')) close();
+  });
+  window.addEventListener('resize', function () {
+    var r = launch.getBoundingClientRect();
+    if (r.left > window.innerWidth - SIZE || r.top > window.innerHeight - SIZE) {
+      launch.style.left = clamp(r.left, 8, window.innerWidth - SIZE - 8) + 'px';
+      launch.style.top = clamp(r.top, 8, window.innerHeight - SIZE - 8) + 'px';
+    }
+    layout();
+  });
+
+  window.ChatBotWidget = {
+    open: open, close: close, toggle: toggle,
+    resetPosition: resetPosition,
+  };
+
+  restorePos();
+  layout();
+  if (autoOpen) open();
+})();

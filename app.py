@@ -24,6 +24,8 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
+from collections import deque
 from pathlib import Path
 from typing import AsyncIterator
 
@@ -57,6 +59,8 @@ def load_env_file(path: Path) -> None:
         key, value = key.strip(), value.strip()
         if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
             value = value[1:-1]
+        elif " #" in value:                 # strip trailing inline comment
+            value = value.split(" #", 1)[0].strip()
         if key and key not in os.environ:
             os.environ[key] = value
 
@@ -71,6 +75,29 @@ ENV_KEY = os.getenv("GROQ_API_KEY", "").strip()
 # Placeholder values from the template must not count as a real key.
 if not ENV_KEY or "your_key" in ENV_KEY or "..." in ENV_KEY:
     ENV_KEY = ""
+
+# Public chat traffic is rate limited per IP (in-memory, resets on restart).
+def _int_env(name: str, default: int, hi: int = 600) -> int:
+    try:
+        return max(1, min(int(os.getenv(name, str(default))), hi))
+    except ValueError:
+        return default
+
+CHAT_RPM = _int_env("CHAT_RPM", 60)                       # every /api/chat request
+WIDGET_RPM = _int_env("WIDGET_RPM", 30)                   # stricter widget cap
+WIDGET_MAX_TOKENS = _int_env("WIDGET_MAX_TOKENS", 1024, 4096)
+_HITS: dict[tuple[str, str], deque] = {}
+
+
+def rate_ok(kind: str, ip: str, limit: int) -> bool:
+    now = time.monotonic()
+    hits = _HITS.setdefault((kind, ip), deque())
+    while hits and now - hits[0] > 60:
+        hits.popleft()
+    if len(hits) >= limit:
+        return False
+    hits.append(now)
+    return True
 
 # --------------------------------------------------------------------------
 # School ERP prompt + lightweight knowledge-base retrieval (no external service)
@@ -192,8 +219,24 @@ async def chat(req: Request):
     if not isinstance(messages, list) or not messages:
         return JSONResponse({"error": "No messages supplied"}, status_code=400)
 
-    api_key = str(body.get("apiKey") or ENV_KEY or "").strip()
-    model = str(body.get("model") or GROQ_MODEL)[:120]
+    # A public widget can be called by anyone, so cap requests per IP and
+    # ignore every client-controlled setting that could inflate Groq usage.
+    widget = bool(body.get("widget"))
+    ip = (req.headers.get("x-forwarded-for", "").split(",")[0].strip()
+          or (req.client.host if req.client else "unknown"))
+    if (not rate_ok("chat", ip, CHAT_RPM)
+            or (widget and not rate_ok("widget", ip, WIDGET_RPM))):
+        async def limited():
+            yield sse({"error": "Too many messages. Please wait a minute and try again."})
+            yield sse("[DONE]")
+        return StreamingResponse(limited(), media_type="text/event-stream", headers=SSE_HEADERS)
+
+    if widget:
+        api_key = ENV_KEY                 # never body["apiKey"]
+        model = GROQ_MODEL               # never body["model"]
+    else:
+        api_key = str(body.get("apiKey") or ENV_KEY or "").strip()
+        model = str(body.get("model") or GROQ_MODEL)[:120]
     # Groq API reference: temperature is 0..2 (default 1), and the current field
     # is `max_completion_tokens` — `max_tokens` is deprecated. Clamp + guard so
     # a bad client value can never produce a 500 or an upstream 400.
@@ -205,13 +248,27 @@ async def chat(req: Request):
         max_tokens = min(max(int(body.get("maxTokens", 2048)), 128), 32768)
     except (TypeError, ValueError):
         max_tokens = 2048
-    system = str(body.get("system") or SYSTEM)[:20000]
+    if widget:
+        temperature = 0.7                       # fixed
+        max_tokens = WIDGET_MAX_TOKENS          # fixed output cap
+    system = SYSTEM if widget else str(body.get("system") or SYSTEM)[:20000]
 
     clean = [
         {"role": "assistant" if m.get("role") == "assistant" else "user",
          "content": str(m.get("content") or "")[:100000]}
         for m in messages[-40:]
     ]
+    if widget:
+        # Hard input cap for public traffic: 12 turns / 12k characters.
+        clean = clean[-12:]
+        budget, out = 12000, []
+        for m in clean:
+            c = m["content"][:budget]
+            out.append({"role": m["role"], "content": c})
+            budget -= len(c)
+            if budget <= 0:
+                break
+        clean = out
     if system:
         last_user = next((m["content"] for m in reversed(clean) if m["role"] == "user"), "")
         excerpts = retrieve(last_user)

@@ -19,6 +19,7 @@
   const popover = $('#connPopover');
   const ripples = $('#ripples');
   const toastEl = $('#toast');
+  const EMBED = !!(window.CBW && window.CBW.embed);
 
   const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -33,8 +34,10 @@
   };
 
   const state = {
-    theme: store.theme === 'dark' || store.theme === 'light' ? store.theme : 'light',
-    apiKey: store.key,
+    theme: (window.CBW && (window.CBW.theme === 'dark' || window.CBW.theme === 'light'))
+      ? window.CBW.theme
+      : (store.theme === 'dark' || store.theme === 'light' ? store.theme : 'light'),
+    apiKey: EMBED ? '' : store.key,
     model: store.model || 'openai/gpt-oss-120b',
     serverKey: false,
     history: [],
@@ -48,7 +51,7 @@
     root.dataset.theme = next;
     app.dataset.theme = next;
     state.theme = next;
-    store.theme = next;
+    if (!EMBED) store.theme = next;   // widget iframe must not overwrite saved theme
   }
   applyTheme(state.theme);
 
@@ -254,6 +257,7 @@
           model: state.model,
           apiKey: state.apiKey,
           temperature: 0.7,
+          widget: EMBED,
         }),
         signal: state.controller.signal,
       });
@@ -437,7 +441,7 @@
   /* ---------------------- init ---------------------- */
   fetch('/api/config').then((r) => r.json()).then((cfg) => {
     state.serverKey = Boolean(cfg.hasServerKey);
-    if (!store.model && cfg.model) { state.model = cfg.model; $('#modelInput').value = cfg.model; }
+    if ((EMBED || !store.model) && cfg.model) { state.model = cfg.model; $('#modelInput').value = cfg.model; }
     updateConn();
   }).catch(() => updateConn());
 

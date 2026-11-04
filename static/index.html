@@ -8,11 +8,19 @@
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='18' fill='%23f2532a'/%3E%3Cpath d='M32 12 38 26 52 32 38 38 32 52 26 38 12 32 26 26Z' fill='%23fff'/%3E%3C/svg%3E" />
 <link rel="stylesheet" href="/styles.css" />
 <script>
-  // Apply saved theme before first paint.
-  try {
-    var t = localStorage.getItem('chatbot.theme') || localStorage.getItem('astra.theme');
-    if (t === 'dark' || t === 'light') document.documentElement.dataset.theme = t;
-  } catch (e) {}
+  // Apply saved theme before first paint; detect widget iframe (embed) mode.
+  (function () {
+    try {
+      var q = new URLSearchParams(location.search);
+      var embed = q.get('embed') === '1';
+      var asked = q.get('theme');
+      if (embed) document.documentElement.classList.add('embed');
+      window.CBW = { embed: embed, theme: asked };
+      var t = (embed && (asked === 'dark' || asked === 'light')) ? asked
+            : (localStorage.getItem('chatbot.theme') || localStorage.getItem('astra.theme'));
+      if (t === 'dark' || t === 'light') document.documentElement.dataset.theme = t;
+    } catch (e) {}
+  })();
 </script>
 </head>
 <body>

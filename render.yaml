@@ -1,0 +1,28 @@
+# Render Blueprint — https://render.com/docs/infrastructure-as-code
+# Do NOT put the Groq key in this file. `sync: false` makes Render prompt for
+# GROQ_API_KEY during Blueprint creation (or set it later in Environment).
+# Render injects PORT automatically; app.py reads it, so do not set PORT here.
+
+services:
+  - type: web
+    name: school-erp-chatbot
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python app.py
+    healthCheckPath: /api/config
+    envVars:
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_MODEL
+        value: openai/gpt-oss-120b
+      - key: GROQ_BASE_URL
+        value: https://api.groq.com/openai/v1
+      - key: HOST
+        value: 0.0.0.0
+      - key: WIDGET_RPM
+        value: 30
+      - key: CHAT_RPM
+        value: 60
+      - key: WIDGET_MAX_TOKENS
+        value: 1024

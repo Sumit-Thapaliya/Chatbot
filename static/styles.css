@@ -369,3 +369,20 @@ html[data-theme="light"] .scene .layer-light { opacity: var(--scene-op); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; scroll-behavior: auto !important; }
 }
+
+/* ---------------------------- WIDGET / EMBED MODE ----------------------------
+   Loaded inside the widget iframe as /?embed=1 — chrome is hidden, the chat
+   fills the panel. The full-page app is unchanged. */
+html.embed, html.embed body { height: 100%; min-height: 0; margin: 0; overflow: hidden; background: transparent; }
+html.embed .scene, html.embed .ripples, html.embed .head, html.embed .hero,
+html.embed .divider, html.embed .hint, html.embed .popover, html.embed .toast { display: none !important; }
+html.embed .app {
+  position: fixed; inset: 0; width: 100%; max-width: none; height: 100%;
+  min-height: 0; max-height: none; margin: 0; border: 0; border-radius: 0;
+  box-shadow: none; animation: none;
+}
+html.embed .app::before, html.embed .app::after, html.embed .dock::before { display: none; }
+html.embed .thread { padding: 14px 16px 4px; }
+html.embed .dock { padding: 8px 12px 12px; }
+html.embed .msg { margin-bottom: 14px; }
+html.embed .msg-body { max-width: 90%; }
