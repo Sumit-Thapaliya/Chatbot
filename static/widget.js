@@ -48,7 +48,7 @@
   }
   var autoOpen   = yes('auto-open', false);
   var draggable  = yes('draggable', true);
-  var remember   = yes('remember-position', true);
+  var remember   = yes('remember-position', false);
   var POS_KEY    = 'chatbot.widget.pos';
   var SIZE       = 58;
 
