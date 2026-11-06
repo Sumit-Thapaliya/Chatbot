@@ -75,3 +75,7 @@ html.embed .composer:focus-within {
 html.embed .bot-av {
   display: none;
 }
+
+html.embed .name .badge {
+  display: none;
+}
